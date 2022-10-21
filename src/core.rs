@@ -25,26 +25,37 @@ pub(crate) enum Token {
 }
 
 #[derive(Debug)]
-pub(crate) enum Types {
+pub(crate) enum Type {
     OBJ, PROP, STR, UNDEF, NULL, NUM,
     BOOL, FUNC, CODEREF, CFUNC, ERR
 }
 
-pub(crate) fn type_str(typ: Types) -> String {
-    format!("{:?}", typ)
+pub(crate) fn type_str(typ: Type) -> String {
+    format!("{:#?}", typ)
 }
 
-pub(crate) fn parse_ident(buffer: &str, t_len: &JsOff) -> Token {
-    if is_ident_begin(buffer.chars().nth(0).unwrap()) {
-        loop {
-            if *t_len < buffer.len() as u32 && is_ident_continue(buffer.chars().nth(*t_len as usize)) {
-                *t_len += 1;
-            }
-            return parse_keyword(buffer)
-        }
-    }
-    Token::ERR
+/*
+pub (crate) fn make_val(typ: Type, data: u64) -> JsVal {
+    0x7ff0u64 << 48u64 | (typ << 48) | data & 0xffffffffffffu64
 }
+*/
+
+fn is_alpha(c: char) -> bool {
+    c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+fn is_ident_begin(c: char) -> bool {
+    c == '_' || c == '$' || is_alpha(c)
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' && c <= '9'
+}
+
+fn is_ident_continue(c: char) -> bool {
+    c == '_' || c == '$' || is_alpha(c) || is_digit(c)
+}
+
 
 pub(crate) fn parse_keyword(buffer: &str) -> Token {
     let value = buffer.chars().nth(0).unwrap_or_else(|| 0 as char);
@@ -124,3 +135,41 @@ pub(crate) fn parse_keyword(buffer: &str) -> Token {
         _ => Token::IDENTIFIER,
     }
 }
+
+pub(crate) fn parse_ident(buffer: &str, t_len: &mut JsOff) -> Token {
+    if is_ident_begin(buffer.chars().nth(0).unwrap()) {
+        loop {
+            if *t_len < buffer.len() as u32 && is_ident_continue(buffer.chars().nth(*t_len as usize).unwrap()) {
+                *t_len += 1;
+            }
+            return parse_keyword(buffer)
+        }
+    }
+    Token::ERR
+}
+
+pub(crate) fn skip_to_next(code: &str, len: JsOff, n: JsOff) -> JsOff {
+    let n_u = n as usize;
+    while n < len {
+        let c = code.chars().nth(n_u).unwrap();
+        let c_n = code.chars().nth(n_u + 1).unwrap();
+
+        if is_space(c) {
+            n += 1;
+        } else if (n + 1 < len) && c == '/' && c_n == '/' {
+            n += 2;
+            while n < len && c != '\n' {
+                n += 1;
+            }
+        } else if (n + 3 < len) && c == '/' && c_n == '*' {
+            n += 4;
+            while n < len && (code.chars().nth(n_u - 2).unwrap() != '*' || code.chars().nth(n_u - 1).unwrap() != '/') {
+                n += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    n
+}
+

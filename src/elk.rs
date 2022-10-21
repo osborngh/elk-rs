@@ -4,6 +4,7 @@
 use crate::core::{
     JsOff,
     JsVal,
+    Token
 };
 
 pub(crate) enum Flags {
@@ -20,8 +21,8 @@ pub struct Js<'a> {
     lwm: JsOff,         // JS RAM low watermark: min free RAM observed
     code: &'a str,      // Current parsed code snippet
     err_msg: &'a str,   // Error message placeholder
-    tok: u8,            // Last parsed token value
-    consumed: u8,       // Indicator that last parsed token consumed
+    tok: Token,            // Last parsed token value
+    consumed: bool,       // Indicator that last parsed token consumed
     flags: Flags,       // Execution flags, see FLAGS enum above
     c_len: JsOff,       // Code snippet length 
     pos: JsOff,         // Current parsing position
@@ -66,13 +67,13 @@ impl<'a> Js<'a> {
     }
 
     /// Set max stack size
-    pub fn setmaxss(&self, i: isize) {
-        todo!("Implement")
+    pub fn setmaxss(&mut self, max: isize) {
+        self.max_ss = max as u32;
     }
 
     /// Set GC trigger threshold
-    pub fn setgct(&self, gct: isize) {
-        todo!("Implement")
+    pub fn setgct(&mut self, gct: isize) {
+        self.gc_t = gct as u32;
     }
 
     pub fn stats(&self, total: &isize, min: &isize, css: &isize) {
@@ -160,6 +161,62 @@ impl<'a> Js<'a> {
     /// Set Js object attribute
     pub fn set_object(js: &Js, num: JsVal, val: &str, ano: JsVal) {
         todo!()
+    }
+}
+
+impl<'a> Js<'a> {
+    fn next(&self) -> Token {
+        if self.consumed { return self.tok }
+        self.consumed = true;
+        self.tok = Token::ERR;
+        self.t_off = self.pos = skiptonext(self.code, self.c_len, self.pos);
+        self.t_len = 0;
+
+        let buf: &str = format!("{}{}", self.code, self.t_off).as_str();
+
+        if self.t_off >= self.c_len {
+            self.tok = Token::EOF;
+            return self.tok
+        }
+
+        match buf.chars().nth(0).unwrap() {
+            '?' => self.token(Token::Q, 1),
+            ':' => self.token(Token::COLON, 1),
+            '(' => self.token(Token::LPAREN, 1),
+            ')' => self.token(Token::RPAREN, 1),
+            '{' => self.token(Token::LBRACE, 1),
+            '}' => self.token(Token::RBRACE, 1),
+            ';' => self.token(Token::SEMICOLON, 1),
+            ',' => self.token(Token::COMMA, 1),
+            '!' => {
+                if self.look(buf, 1, '=') && self.look(buf, 2, '=') {
+                    self.token(Token::NE, 3)
+                } else { self.token(Token::NOT, 1) }
+            },
+            '.' => self.token(Token::DOT, 1),
+            '~' => self.token(Token::TILDE, 1),
+            '-' => {
+                if self.look(buf, 1, '-') {
+                    self.token(Token::POSTDEC, 2)
+                } else if self.look(buf, 1, '='){
+                    self.token(Token::MINUS_ASSIGN, 2)
+                } else {
+                    self.token(Token::MINUS, 1)
+                }
+            }
+            _ => (),
+        };
+
+        self.tok
+    }
+
+    fn look(&self, buf: &str, offset: u8, ch: char) -> bool {
+        (self.t_off + offset as u32) < self.c_len && buf.chars().nth(offset as usize).unwrap() == ch
+    }
+
+    fn token(&self, tok: Token, len: u8) {
+        self.tok = tok;
+        self.t_len = len as u32;
     }
 }
 
