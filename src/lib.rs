@@ -1,4 +1,5 @@
 // Copyright (c) 2013-2022 Cesanta Software Limited
+// Copyright (c) 2022 Osborn Ghampson <osbornghdev@gmail.com> 
 // All rights reserved
 //
 // This software is dual-licensed: you can redistribute it and/or modify
@@ -14,6 +15,6 @@
 // Alternatively, you can license this software under a commercial
 // license, please contact us at https://cesanta.com/contact.html
 
+pub mod elk;
 mod core;
-mod elk;
 

@@ -9,13 +9,30 @@ const JS_GC_THRESHOLD: f32 = 0.75;
 pub(crate) type JsOff = u32;
 pub(crate) type JsVal = u64;
 
+/*
+const F_NOEXEC: usize = 1usize;
+const F_LOOP: usize = 2usize;
+const F_CALL: usize = 4usize;
+const F_BREAK: usize = 8usize;
+const F_RETURN: usize = 16usize;
+*/
+
+pub(crate) enum Flags {
+    NOEXEC,     // Parse code, but not execute
+    LOOP,       // We're inside the loop
+    CALL,       // We're inside a function call
+    BREAK,      // Exit the loop
+    RETURN      // Return has been executed
+}
+
+#[derive(Clone, PartialEq)]
 pub(crate) enum Token {
     ERR, EOF, IDENTIFIER, NUMBER, STRING, SEMICOLON,
-    LPAREN, RPAREN, LBRACE, RBRACE, BREAK, CASE, CATCH,
+    LPAREN, RPAREN, LBRACE, RBRACE, BREAK = 50, CASE, CATCH,
     CLASS, CONST, CONTINUE, DEFAULT, DELETE, DO, ELSE,
     FINALLY, FOR, FUNC, IF, IN, INSTANCEOF, LET, NEW,
     RETURN, SWITCH, THIS, THROW, TRY, VAR, VOID, WHILE,
-    WITH, YIELD, UNDEF, NULL, TRUE, FALSE, DOT, CALL,
+    WITH, YIELD, UNDEF, NULL, TRUE, FALSE, DOT = 100, CALL,
     POSTINC, POSTDEC, NOT, TILDE, TYPEOF, UPLUS, UMINUS,
     EXP, MUL, DIV, REM, PLUS, MINUS, SHL, SHR, ZSHR, LT,
     LE, GT, GE, EQ, NE, AND, XOR, OR, LAND, LOR, COLON,
@@ -24,22 +41,62 @@ pub(crate) enum Token {
     ZSHR_ASSIGN, AND_ASSIGN, XOR_ASSIGN, OR_ASSIGN, COMMA,
 }
 
+// A JS memory stores different entities: objects, properties, strings
+// All entities are packed to the beginning of a buffer.
+// The `brk` marks the end of the used memory:
+//
+// | entity1 | entity2 | .... | entityN |  unused memory |
+// |---------|---------|------| ------- | -------------- | 
+// Js.mem                               Js.brk           Js.size
+//
+// LSB: Least Significant Bit
+//
+// Each entity is 4-byte aligned, therefore 2 LSB bits store entity type
+//
+// Object:    8 bytes: offset of the first property, offset of the upper obj
+// Property:    8 bytes + val: 4 byte next property, 4 byte key offs, N byte value
+// String:    4xN bytes: 4 byte len << 2, 4 byte-aligned 0-terminated data
+//
+// If Rust functions are imported, they use the upper part
+// of memory as stack for passing params. Each argument is pushed to the top of the memory as
+// JsVal, and Js.size is decreased by sizeof(JsVal), i.e. 8 bytes. When the function returns,
+// Js.size is restored back. So Js.size is used as a stack pointer.
+//
+
+
+// Pack Js values into u64, float64
+// 64bit "float64": 1 bit sign, 11 bits exponent, 52 bits mantissa
+//
+// seeeeeee|eeeemmmm|mmmmmmmm|mmmmmmmm|mmmmmmmm|mmmmmmmm|mmmmmmmm|mmmmmmmm
+// 11111111|11110000|00000000|00000000|00000000|00000000|00000000|00000000 inf
+// 11111111|11111000|00000000|00000000|00000000|00000000|00000000|00000000 qnan
+//
+// 11111111|1111tttt|vvvvvvvv|vvvvvvvv|vvvvvvvv|vvvvvvvv|vvvvvvvv|vvvvvvvv
+//  NaN marker |type|  48-bit placeholder for values: pointers, strings
+//
+// On 64-bit platforms, pointers are really 48 bit only, so they can fit,
+// provided they are sign extended
+
 #[derive(Debug)]
 pub(crate) enum Type {
     OBJ, PROP, STR, UNDEF, NULL, NUM,
-    BOOL, FUNC, CODEREF, CFUNC, ERR
+    BOOL, FUNC, CODEREF, RFUNC, ERR
 }
 
 pub(crate) fn type_str(typ: Type) -> String {
     format!("{:#?}", typ)
 }
 
-/*
-pub (crate) fn make_val(typ: Type, data: u64) -> JsVal {
-    0x7ff0u64 << 48u64 | (typ << 48) | data & 0xffffffffffffu64
+pub(crate) fn make_val(typ: Type, data: u64) -> JsVal {
+    0x7ff0u64 << 48u64 | ((typ as u8) << 48) as JsVal | data & 0xffffffffffffu64
 }
-*/
 
+pub(crate) fn v_data(v: JsVal) -> usize {
+    (v & !(0x7fffu64 << 48u64 as JsVal)) as usize
+}
+
+
+// Utilities
 fn is_alpha(c: char) -> bool {
     c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
@@ -56,11 +113,15 @@ fn is_ident_continue(c: char) -> bool {
     c == '_' || c == '$' || is_alpha(c) || is_digit(c)
 }
 
+fn is_space(c: char) -> bool {
+    c == ' ' || c == '\r' || c == '\n' || c == '\t'
+}
+
 
 pub(crate) fn parse_keyword(buffer: &str) -> Token {
-    let value = buffer.chars().nth(0).unwrap_or_else(|| 0 as char);
+    let value = buffer.chars().nth(0).unwrap();
     match value {
-        'b' if "break" == buffer => Token::BREAK,
+        'b' if "break" == buffer.to_owned() => Token::BREAK,
         'c' => {
             match buffer {
                 "class" => Token::CLASS,
@@ -148,7 +209,7 @@ pub(crate) fn parse_ident(buffer: &str, t_len: &mut JsOff) -> Token {
     Token::ERR
 }
 
-pub(crate) fn skip_to_next(code: &str, len: JsOff, n: JsOff) -> JsOff {
+pub(crate) fn skip_to_next(code: &str, len: JsOff, mut n: JsOff) -> JsOff {
     let n_u = n as usize;
     while n < len {
         let c = code.chars().nth(n_u).unwrap();
@@ -173,3 +234,22 @@ pub(crate) fn skip_to_next(code: &str, len: JsOff, n: JsOff) -> JsOff {
     n
 }
 
+pub(crate) fn is_nan(v: JsVal) -> bool {
+    (v >> 52u64) == 0x7ffu64
+}
+
+pub(crate) fn v_type(v: JsVal) -> u8 {
+    if is_nan(v) { ((v >> 48u64) & 15u64) as u8 } else { Token::NUMBER as u8 }
+}
+
+pub(crate) fn tok_val(d: f64) -> JsVal {
+    d as JsVal
+}
+
+pub(crate) fn is_err(v: JsVal) -> bool {
+    v_type(v) == Token::ERR as u8
+}
+
+pub(crate) fn str_to_double(buf: &str) -> f64 {
+    buf.parse::<f64>().unwrap()
+}

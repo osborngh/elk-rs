@@ -1,19 +1,8 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
-use crate::core::{
-    JsOff,
-    JsVal,
-    Token
-};
+use crate::core::*;
 
-pub(crate) enum Flags {
-    NOEXEC,     // Parse code, but not execute
-    LOOP,       // We're inside the loop
-    CALL,       // We're inside a function call
-    BREAK,      // Exit the loop
-    RETURN      // Return has been executed
-}
 
 // JS Engine
 pub struct Js<'a> {
@@ -31,7 +20,7 @@ pub struct Js<'a> {
     no_gc: JsOff,       // Entity offset to exclude from GC
     t_val: JsVal,      // Holds last parsed numeric or string literal value
     scope: JsVal,      // Current scope
-    mem: u8,            // Available JS memory
+    mem: Vec<u8>,            // Available JS memory
     size: JsOff,        // Memory size
     brk: JsOff,         // Current mem usage boundary
     gc_t: JsOff,        // GC thresold. If brk > gct, trigger GC
@@ -40,6 +29,7 @@ pub struct Js<'a> {
 }
 
 
+/// Api
 impl<'a> Js<'a> {
     /// Create a new Js instance
     pub fn new(buffer: &[u8]) -> Js {
@@ -86,6 +76,7 @@ impl<'a> Js<'a> {
     }
 }
 
+/// Api
 impl<'a> Js<'a> {
     /// All Methods with the get_ prefix get objects from `Js` and return them as rust objects.
     /// Serializing? Essentially
@@ -106,7 +97,7 @@ impl<'a> Js<'a> {
     }
 
     /// Return Js string
-    pub fn get_str(js: &Js, val: JsVal, len: &isize) -> &'static str {
+    pub fn get_str(val: JsVal, len: &isize) -> &'static str {
         todo!()
     }
 
@@ -134,7 +125,7 @@ impl<'a> Js<'a> {
     }
 
     /// Create Js string
-    pub fn make_str(js: &Js, string: &str, len: isize) -> JsVal {
+    pub fn make_str(string: &str, len: isize) -> JsVal {
         todo!()
     }
 
@@ -144,8 +135,8 @@ impl<'a> Js<'a> {
     }
 
     /// Create Js error
-    pub fn make_err(js: &Js, fmt: &str, args: Vec<&str>) {
-        todo!()
+    pub fn make_err(fmt: &str) -> JsVal {
+        make_val(Type::ERR, 0)
     }
 
     /// Create Js function
@@ -154,29 +145,53 @@ impl<'a> Js<'a> {
     }
 
     /// Create Js object
-    pub fn make_object(js: &Js) {
+    pub fn make_object() {
         todo!()
     }
 
     /// Set Js object attribute
-    pub fn set_object(js: &Js, num: JsVal, val: &str, ano: JsVal) {
+    pub fn set_object(num: JsVal, val: &str, ano: JsVal) {
         todo!()
     }
 }
 
 impl<'a> Js<'a> {
-    fn next(&self) -> Token {
-        if self.consumed { return self.tok }
+    pub fn stmt(&self) -> JsVal {
+        let res: JsVal = 0;
+
+        if self.brk > self.gc_t { Js::<'a>::gc(); }
+
+        match self.next() {
+            Token::CASE | Token::CATCH | Token::CLASS | Token::CONST | Token::DEFAULT | Token::DELETE | Token::DO | Token::FINALLY | Token::IN | Token::INSTANCEOF | Token::NEW | Token::SWITCH | Token::THIS | Token::THROW | Token::TRY | Token::VAR | Token::VOID | Token::WITH | Token::WHILE | Token::YIELD => {
+                res = Js::<'a>::make_err(format!("{} not implemented", 2).as_str());
+            },
+            Token::CONTINUE => { res = Js::<'a>::continue_(); },
+            _ => ()
+        }
+        res
+    }
+
+    pub fn gc() {
+
+    } 
+}
+
+// Internals
+impl<'a> Js<'a> {
+    fn next(&mut self) -> Token {
+        if self.consumed { return self.tok.clone() }
         self.consumed = true;
         self.tok = Token::ERR;
-        self.t_off = self.pos = skiptonext(self.code, self.c_len, self.pos);
+        self.t_off = skip_to_next(self.code, self.c_len, self.pos);
+        self.pos = self.t_off;
         self.t_len = 0;
 
-        let buf: &str = format!("{}{}", self.code, self.t_off).as_str();
+        let b = format!("{}{}", self.code, self.t_off);
+        let buf: &str = b.as_str();
 
         if self.t_off >= self.c_len {
             self.tok = Token::EOF;
-            return self.tok
+            return self.tok.clone()
         }
 
         match buf.chars().nth(0).unwrap() {
@@ -189,9 +204,12 @@ impl<'a> Js<'a> {
             ';' => self.token(Token::SEMICOLON, 1),
             ',' => self.token(Token::COMMA, 1),
             '!' => {
-                if self.look(buf, 1, '=') && self.look(buf, 2, '=') {
+                if self.look(buf, 1, '=') &&
+                    self.look(buf, 2, '=') {
                     self.token(Token::NE, 3)
-                } else { self.token(Token::NOT, 1) }
+                } else {
+                    self.token(Token::NOT, 1)
+                }
             },
             '.' => self.token(Token::DOT, 1),
             '~' => self.token(Token::TILDE, 1),
@@ -203,20 +221,204 @@ impl<'a> Js<'a> {
                 } else {
                     self.token(Token::MINUS, 1)
                 }
-            }
-            _ => (),
+            },
+            '+' => {
+                if self.look(buf, 1, '+') {
+                    self.token(Token::POSTINC, 2)
+                } else if self.look(buf, 1, '=') {
+                    self.token(Token::PLUS_ASSIGN, 2)
+                } else {
+                    self.token(Token::PLUS, 1)
+                }
+            },
+            '*' => {
+                if self.look(buf, 1, '*') {
+                    self.token(Token::EXP, 2)
+                } else if self.look(buf, 1, '=') {
+                    self.token(Token::MUL_ASSIGN, 1)
+                } else {
+                    self.token(Token::MUL, 1)
+                }
+            },
+            '/' => {
+                if self.look(buf, 1, '=') {
+                    self.token(Token::DIV_ASSIGN, 2)
+                } else {
+                    self.token(Token::DIV, 1)
+                }
+            },
+            '%' => {
+                if self.look(buf, 1, '=') {
+                    self.token(Token::REM_ASSIGN, 2)
+                } else {
+                    self.token(Token::REM, 1)
+                }
+            },
+            '&' => {
+                if self.look(buf, 1, '&') {
+                    self.token(Token::LAND, 2)
+                } else if self.look(buf, 2, '=') {
+                    self.token(Token::AND_ASSIGN, 2)
+                } else {
+                    self.token(Token::AND, 1)
+                }
+            },
+            '|' => {
+                if self.look(buf, 1, '|') {
+                    self.token(Token::LOR, 2)
+                } else if self.look(buf, 1, '=') {
+                    self.token(Token::OR_ASSIGN, 1)
+                } else {
+                    self.token(Token::OR, 1)
+                }
+            },
+            '=' => {
+                if self.look(buf, 1, '=') &&
+                    self.look(buf, 2, '=') {
+                    self.token(Token::EQ, 3)
+                } else {
+                    self.token(Token::ASSIGN, 1)
+                }
+            },
+            '<' => {
+                if self.look(buf, 1, '<') && self.look(buf, 2, '=') {
+                    self.token(Token::SHL_ASSIGN, 3)
+                } else if self.look(buf, 1, '<') {
+                    self.token(Token::SHL, 2)
+                } else if self.look(buf, 1, '=') {
+                    self.token(Token::LE, 2)
+                } else {
+                    self.token(Token::LT, 1)
+                }
+            },
+            '>' => {
+                if self.look(buf, 1, '>') && self.look(buf, 2, '=') {
+                    self.token(Token::SHR_ASSIGN, 3)
+                } else if self.look(buf, 1, '>') {
+                    self.token(Token::SHR, 2)
+                } else if self.look(buf, 1, '=') {
+                    self.token(Token::GE, 2);
+                } else {
+                    self.token(Token::GT, 1)
+                }
+            },
+            '^' => {
+                if self.look(buf, 1, '=') {
+                    self.token(Token::XOR_ASSIGN, 2)
+                } else {
+                    self.token(Token::XOR, 1)
+                }
+            },
+            '"' | '\'' => {
+                let c_n = buf.chars().nth(0).unwrap();
+
+                self.t_len += 1;
+
+                while (self.t_off + self.t_len) < self.c_len && buf.chars().nth(self.t_len as usize).unwrap() != c_n {
+                    let mut inc: u8 = 1;
+
+                    if buf.chars().nth(self.t_len as usize).unwrap() == '\\' {
+                        if self.t_off + self.t_len + 2 > self.c_len {
+                            break;
+                        }
+                        inc = 2;
+                        if buf.chars().nth(self.t_len as usize + 1).unwrap() == 'x' {
+                            if self.t_off + self.t_len + 4 > self.c_len {
+                                break;
+                            }
+                            inc = 4;
+                        }
+                    }
+                    self.t_len += inc as u32;
+                }
+                if c_n == buf.chars().nth(self.t_len as usize).unwrap() {
+                    self.tok = Token::STRING;
+                    self.t_len += 1;
+                }
+            },
+            '0'..='9' => {
+                self.t_val = tok_val(str_to_double(buf));
+                // TODO(lsm): protect against OOB access
+                self.token(Token::NUMBER, buf.len() as JsOff)
+            },
+            _ => {
+                self.tok = parse_ident(buf, &mut self.t_len);
+            },
         };
 
-        self.tok
+        self.pos = self.t_off + self.t_len;
+        self.tok.clone()
     }
 
     fn look(&self, buf: &str, offset: u8, ch: char) -> bool {
         (self.t_off + offset as u32) < self.c_len && buf.chars().nth(offset as usize).unwrap() == ch
     }
 
-    fn token(&self, tok: Token, len: u8) {
+    fn token(&mut self, tok: Token, len: JsOff) {
         self.tok = tok;
-        self.t_len = len as u32;
+        self.t_len = len;
+    }
+
+    fn look_ahead(&mut self) -> Token {
+        let old: Token = self.tok.clone();
+        let tok: Token;
+
+        let pos: JsOff = self.pos;
+
+        self.consumed = true;
+        tok = self.next();
+
+        self.pos = pos;
+        self.tok = old;
+        tok
+    }
+
+    fn make_scope(&mut self) {
+        match self.flags {
+            Flags::NOEXEC => panic!("[ELK]: No Exec Has Been Set"),
+            _ => ()
+        }
+
+        let prev: JsOff = v_data(self.scope) as u32;
+        // self.scope = Js::<'a>::make_object(prev);
+    }
+
+    fn load_off(&self, off: usize) -> JsOff {
+        let mut v: JsOff = 0;
+        assert!(self.brk <= self.size);
+        std::mem::replace(&mut v, self.mem[off] as u32)
+    }
+
+    fn upper(&self, scope: JsVal) -> JsVal {
+        make_val(Type::OBJ, self.load_off(v_data(scope) + std::mem::size_of::<JsOff>()) as u64)
+    }
+
+    fn delete_scope(&mut self) {
+        self.scope = self.upper(self.scope);
+    }
+
+    fn create_block(&self, create_scope: bool) -> JsVal {
+        let res: JsVal = Js::<'a>::make_undef();
+
+        if create_scope { self.make_scope() };
+        self.consumed = true;
+
+        while self.next() != Token::EOF && self.next() != Token::RBRACE && !is_err(res) {
+            let t = self.tok;
+
+            let res = Js::<'a>::stmt();
+
+            if !is_err(res) && t != Token::LBRACE && t != Token::IF && t != Token::WHILE && self.tok != Token::SEMICOLON {
+                res = Js::<'a>::make_err("; expected");
+                break;
+            }
+        }
+        if create_scope { self.delete_scope() }
+        res
+    }
+
+    fn lkp(&self, obj: JsVal, buf: &str, len: usize) {
+        let off: JsOff = self.load_off(v_data(obj)) & !3u32;
     }
 }
 
