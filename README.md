@@ -4,7 +4,7 @@ elk-rs is a port of the [Elk](https://github.com/cesanta/elk) JavaScript engine.
 
 # Description
 
-	[Elk](https://github.com/cesanta/elk)
+[Elk](https://github.com/cesanta/elk)
 
 
 
